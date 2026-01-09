@@ -3,6 +3,7 @@ import os
 import faiss
 import pickle
 import numpy as np
+import re
 
 import pdfplumber
 import docx
@@ -11,33 +12,42 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 
-# STREAMLIT CONFIG
+
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 
 st.set_page_config(
     page_title="AI Legal Assistant",
-    layout="centered"
+    layout="wide"
 )
 
-st.title(" AI Legal Assistant")
-st.caption(" Legal Document Q&A ")
+st.title("⚖️ AI Legal Assistant")
+st.caption("Legal Document Analysis & Q&A")
 
+
+# =========================================================
 # LOAD FAISS + METADATA
+# =========================================================
 
 @st.cache_resource
 def load_faiss():
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    FAISS_PATH = os.path.join(BASE_DIR, "faiss_index", "index.faiss")
-    META_PATH  = os.path.join(BASE_DIR, "faiss_index", "metadata.pkl")
+    base = os.path.dirname(os.path.abspath(__file__))
+    index_path = os.path.join(base, "faiss_index", "index.faiss")
+    meta_path = os.path.join(base, "faiss_index", "metadata.pkl")
 
-    index = faiss.read_index(FAISS_PATH)
-    with open(META_PATH, "rb") as f:
+    index = faiss.read_index(index_path)
+    with open(meta_path, "rb") as f:
         metadata = pickle.load(f)
 
     return index, metadata
 
 index, metadata = load_faiss()
 
-# LOAD MODELS (CACHED)
+
+# =========================================================
+# LOAD MODELS
+# =========================================================
 
 @st.cache_resource
 def load_models():
@@ -51,32 +61,84 @@ def load_models():
 
 embed_model, summarizer = load_models()
 
-# RAG FUNCTIONS (INDEXED DOCS)
+
+# =========================================================
+# UTILITIES
+# =========================================================
+
+def clean_text(text):
+    text = re.sub(r'\b[a-d]\)\s*', '', text)
+    text = re.sub(r'\n+', '\n', text)
+    return text.strip()
+
+
+def format_output(result):
+    out = "### 🧾 Executive Summary\n"
+    out += result["executive_summary"] + "\n\n"
+
+    out += "### ⚠️ Key Risks\n"
+    for r in result["key_risks"]:
+        out += f"- {r}\n"
+
+    out += "\n### 📌 Obligations\n"
+    for o in result["obligations"]:
+        out += f"- {o}\n"
+
+    return out
+
+
+# =========================================================
+# RAG (INDEXED DOCS)
+# =========================================================
 
 def retrieve(query, top_k=3):
     emb = embed_model.encode([query])
     _, ids = index.search(np.array(emb).astype("float32"), top_k)
     return [metadata[i]["text"] for i in ids[0]]
 
-def answer_from_index(query):
-    chunks = retrieve(query)
-    answers = []
+
+def aggregate_from_chunks(chunks):
+    summaries = []
 
     for c in chunks:
         prompt = f"""
-Answer the question based on the legal text below:
+You are a legal analyst.
 
+Extract obligations and risks from the clause below.
+Do not repeat text. Use bullet points.
+
+Clause:
 {c[:1000]}
 
-Question:
-{query}
+Answer format:
+Obligations:
+- ...
+
+Risks:
+- ...
 """
-        res = summarizer(prompt, max_new_tokens=200)[0]["generated_text"]
-        answers.append(res)
+        res = summarizer(prompt, max_new_tokens=180)[0]["generated_text"]
+        summaries.append(clean_text(res))
 
-    return "\n\n".join(answers)
+    risks, obligations = [], []
 
+    for s in summaries:
+        low = s.lower()
+        if "indemn" in low or "liable" in low or "risk" in low:
+            risks.append(s)
+        if "shall" in low or "must" in low:
+            obligations.append(s)
+
+    return {
+        "executive_summary": f"{len(obligations)} obligations and {len(risks)} risks identified.",
+        "key_risks": list(set(risks)),
+        "obligations": list(set(obligations))
+    }
+
+
+# =========================================================
 # FILE EXTRACTION
+# =========================================================
 
 def extract_pdf(file):
     text = ""
@@ -85,57 +147,35 @@ def extract_pdf(file):
             text += page.extract_text() or ""
     return text
 
+
 def extract_docx(file):
     d = docx.Document(file)
     return "\n".join(p.text for p in d.paragraphs)
 
+
 def extract_excel(file):
-    try:
-        df = pd.read_excel(file, engine="openpyxl")
-        return df.to_string()
-    except Exception as e:
-        return f"Error reading Excel file: {e}"
-
-def answer_from_uploaded_doc(text, question):
-    chunks = [text[i:i+500] for i in range(0, len(text), 500)]
-
-    embeddings = embed_model.encode(chunks)
-    temp_index = faiss.IndexFlatL2(embeddings.shape[1])
-    temp_index.add(np.array(embeddings).astype("float32"))
-
-    q_emb = embed_model.encode([question])
-    _, ids = temp_index.search(np.array(q_emb).astype("float32"), 3)
-
-    answers = []
-    for i in ids[0]:
-        prompt = f"""
-Answer using the document content below:
-
-{chunks[i]}
-
-Question:
-{question}
-"""
-        res = summarizer(prompt, max_new_tokens=200)[0]["generated_text"]
-        answers.append(res)
-
-    return "\n\n".join(answers)
+    df = pd.read_excel(file, engine="openpyxl")
+    return df.to_string()
 
 
-# SIDEBAR (UPLOAD)
-
+# =========================================================
+# SIDEBAR (UPLOAD + CONTROLS)
+# =========================================================
 
 with st.sidebar:
-    st.header(" Upload Document (Optional)")
+    st.header("📂 Upload Document")
     uploaded_file = st.file_uploader(
         "PDF / DOCX / XLSX",
         type=["pdf", "docx", "xlsx"]
     )
 
-    if st.button(" Clear Chat"):
+    if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
 
+
+# =========================================================
 # CHAT STATE
+# =========================================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -144,18 +184,20 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# CHAT INPUT
 
-prompt = st.chat_input("Ask a legal question...")
+# =========================================================
+# CHAT INPUT (BOTTOM)
+# =========================================================
 
-if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
+query = st.chat_input("Ask a legal question...")
 
+if query:
+    st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(query)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("Analyzing document..."):
             try:
                 if uploaded_file:
                     if uploaded_file.name.endswith(".pdf"):
@@ -165,12 +207,15 @@ if prompt:
                     else:
                         text = extract_excel(uploaded_file)
 
-                    answer = answer_from_uploaded_doc(text, prompt)
+                    chunks = [text[i:i+600] for i in range(0, len(text), 600)]
                 else:
-                    answer = answer_from_index(prompt)
+                    chunks = retrieve(query)
+
+                result = aggregate_from_chunks(chunks)
+                answer = format_output(result)
 
             except Exception as e:
-                answer = f" Error: {e}"
+                answer = f"❌ Error: {e}"
 
         st.markdown(answer)
 
