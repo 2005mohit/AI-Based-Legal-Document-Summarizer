@@ -90,8 +90,11 @@ def extract_docx(file):
     return "\n".join(p.text for p in d.paragraphs)
 
 def extract_excel(file):
-    df = pd.read_excel(file)
-    return df.to_string()
+    try:
+        df = pd.read_excel(file, engine="openpyxl")
+        return df.to_string()
+    except Exception as e:
+        return f"Error reading Excel file: {e}"
 
 def answer_from_uploaded_doc(text, question):
     chunks = [text[i:i+500] for i in range(0, len(text), 500)]
