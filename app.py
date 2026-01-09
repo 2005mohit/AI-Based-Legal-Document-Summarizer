@@ -1,95 +1,174 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-
+import streamlit as st
+import os
 import faiss
 import pickle
 import numpy as np
-import os
+
+import pdfplumber
+import docx
+import pandas as pd
 
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 
-# FASTAPI INIT
+# STREAMLIT CONFIG
 
-app = FastAPI(
-    title="AI-Based Legal Document Summarizer",
-    version="1.0"
+st.set_page_config(
+    page_title="AI Legal Assistant",
+    layout="centered"
 )
 
-# ABSOLUTE PATH RESOLUTION
+st.title(" AI Legal Assistant")
+st.caption(" Legal Document Q&A ")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# LOAD FAISS + METADATA
 
-FAISS_PATH = os.path.join(BASE_DIR, "faiss_index", "index.faiss")
-META_PATH  = os.path.join(BASE_DIR, "faiss_index", "metadata.pkl")
+@st.cache_resource
+def load_faiss():
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    FAISS_PATH = os.path.join(BASE_DIR, "faiss_index", "index.faiss")
+    META_PATH  = os.path.join(BASE_DIR, "faiss_index", "metadata.pkl")
 
-print("DEBUG FAISS PATH:", FAISS_PATH)
-print("DEBUG META PATH:", META_PATH)
+    index = faiss.read_index(FAISS_PATH)
+    with open(META_PATH, "rb") as f:
+        metadata = pickle.load(f)
 
-# LOAD INDEX & METADATA
+    return index, metadata
 
-index = faiss.read_index(FAISS_PATH)
+index, metadata = load_faiss()
 
-with open(META_PATH, "rb") as f:
-    metadata = pickle.load(f)
+# LOAD MODELS (CACHED)
 
-# MODELS
+@st.cache_resource
+def load_models():
+    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    summarizer = pipeline(
+        "text2text-generation",
+        model="google/flan-t5-small",
+        device=-1
+    )
+    return embed_model, summarizer
 
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+embed_model, summarizer = load_models()
 
-summarizer = pipeline(
-    "text2text-generation",
-    model="google/flan-t5-small",
-    device=-1
-)
-
-# RAG LOGIC
+# RAG FUNCTIONS (INDEXED DOCS)
 
 def retrieve(query, top_k=3):
     emb = embed_model.encode([query])
     _, ids = index.search(np.array(emb).astype("float32"), top_k)
     return [metadata[i]["text"] for i in ids[0]]
 
-def summarize_chunks(chunks):
-    out = []
+def answer_from_index(query):
+    chunks = retrieve(query)
+    answers = []
+
     for c in chunks:
         prompt = f"""
-Extract obligations and risks from the clause below:
+Answer the question based on the legal text below:
 
 {c[:1000]}
+
+Question:
+{query}
 """
-        res = summarizer(prompt, max_new_tokens=150)[0]["generated_text"]
-        out.append(res)
-    return out
+        res = summarizer(prompt, max_new_tokens=200)[0]["generated_text"]
+        answers.append(res)
 
-def aggregate(query):
-    chunks = retrieve(query)
-    summaries = summarize_chunks(chunks)
+    return "\n\n".join(answers)
 
-    risks, obligations = [], []
+# FILE EXTRACTION
 
-    for s in summaries:
-        t = s.lower()
-        if "indemn" in t or "liability" in t:
-            risks.append(s)
-        if "shall" in t or "will" in t:
-            obligations.append(s)
+def extract_pdf(file):
+    text = ""
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            text += page.extract_text() or ""
+    return text
 
-    return {
-        "executive_summary": f"{len(obligations)} obligations and {len(risks)} risks found.",
-        "key_risks": list(set(risks)),
-        "obligations": list(set(obligations))
-    }
+def extract_docx(file):
+    d = docx.Document(file)
+    return "\n".join(p.text for p in d.paragraphs)
 
-# API
+def extract_excel(file):
+    df = pd.read_excel(file)
+    return df.to_string()
 
-class Query(BaseModel):
-    question: str
+def answer_from_uploaded_doc(text, question):
+    chunks = [text[i:i+500] for i in range(0, len(text), 500)]
 
-@app.get("/")
-def health():
-    return {"status": "running"}
+    embeddings = embed_model.encode(chunks)
+    temp_index = faiss.IndexFlatL2(embeddings.shape[1])
+    temp_index.add(np.array(embeddings).astype("float32"))
 
-@app.post("/summarize")
-def summarize_api(q: Query):
-    return aggregate(q.question)
+    q_emb = embed_model.encode([question])
+    _, ids = temp_index.search(np.array(q_emb).astype("float32"), 3)
+
+    answers = []
+    for i in ids[0]:
+        prompt = f"""
+Answer using the document content below:
+
+{chunks[i]}
+
+Question:
+{question}
+"""
+        res = summarizer(prompt, max_new_tokens=200)[0]["generated_text"]
+        answers.append(res)
+
+    return "\n\n".join(answers)
+
+
+# SIDEBAR (UPLOAD)
+
+
+with st.sidebar:
+    st.header(" Upload Document (Optional)")
+    uploaded_file = st.file_uploader(
+        "PDF / DOCX / XLSX",
+        type=["pdf", "docx", "xlsx"]
+    )
+
+    if st.button(" Clear Chat"):
+        st.session_state.messages = []
+
+# CHAT STATE
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# CHAT INPUT
+
+prompt = st.chat_input("Ask a legal question...")
+
+if prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                if uploaded_file:
+                    if uploaded_file.name.endswith(".pdf"):
+                        text = extract_pdf(uploaded_file)
+                    elif uploaded_file.name.endswith(".docx"):
+                        text = extract_docx(uploaded_file)
+                    else:
+                        text = extract_excel(uploaded_file)
+
+                    answer = answer_from_uploaded_doc(text, prompt)
+                else:
+                    answer = answer_from_index(prompt)
+
+            except Exception as e:
+                answer = f" Error: {e}"
+
+        st.markdown(answer)
+
+    st.session_state.messages.append({"role": "assistant", "content": answer})
