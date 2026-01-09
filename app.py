@@ -9,17 +9,15 @@ import os
 from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 
-# -------------------------------
 # FASTAPI INIT
-# -------------------------------
+
 app = FastAPI(
     title="AI-Based Legal Document Summarizer",
     version="1.0"
 )
 
-# -------------------------------
 # ABSOLUTE PATH RESOLUTION
-# -------------------------------
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FAISS_PATH = os.path.join(BASE_DIR, "faiss_index", "index.faiss")
@@ -28,17 +26,15 @@ META_PATH  = os.path.join(BASE_DIR, "faiss_index", "metadata.pkl")
 print("DEBUG FAISS PATH:", FAISS_PATH)
 print("DEBUG META PATH:", META_PATH)
 
-# -------------------------------
 # LOAD INDEX & METADATA
-# -------------------------------
+
 index = faiss.read_index(FAISS_PATH)
 
 with open(META_PATH, "rb") as f:
     metadata = pickle.load(f)
 
-# -------------------------------
 # MODELS
-# -------------------------------
+
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 summarizer = pipeline(
@@ -47,9 +43,8 @@ summarizer = pipeline(
     device=-1
 )
 
-# -------------------------------
 # RAG LOGIC
-# -------------------------------
+
 def retrieve(query, top_k=3):
     emb = embed_model.encode([query])
     _, ids = index.search(np.array(emb).astype("float32"), top_k)
@@ -86,9 +81,8 @@ def aggregate(query):
         "obligations": list(set(obligations))
     }
 
-# -------------------------------
 # API
-# -------------------------------
+
 class Query(BaseModel):
     question: str
 
