@@ -1,8 +1,9 @@
-fastapi
-uvicorn
-pydantic
+streamlit
 faiss-cpu
 sentence-transformers
 transformers
 torch
+pdfplumber
+python-docx
+pandas
 numpy
