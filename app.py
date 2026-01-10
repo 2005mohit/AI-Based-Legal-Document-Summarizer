@@ -22,7 +22,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚖️ AI Legal Assistant")
+st.title("AI-Based Legal Document Summarizer")
 st.caption("Legal Document Analysis & Q&A")
 
 
