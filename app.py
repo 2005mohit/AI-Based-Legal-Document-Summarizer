@@ -13,9 +13,7 @@ from sentence_transformers import SentenceTransformer
 from transformers import pipeline
 
 
-# =========================================================
 # PAGE CONFIG
-# =========================================================
 
 st.set_page_config(
     page_title="AI Legal Assistant",
@@ -26,9 +24,7 @@ st.title("AI-Based Legal Document Summarizer")
 st.caption("Legal Document Analysis & Q&A")
 
 
-# =========================================================
 # LOAD FAISS + METADATA
-# =========================================================
 
 @st.cache_resource
 def load_faiss():
@@ -45,9 +41,7 @@ def load_faiss():
 index, metadata = load_faiss()
 
 
-# =========================================================
 # LOAD MODELS
-# =========================================================
 
 @st.cache_resource
 def load_models():
@@ -62,9 +56,7 @@ def load_models():
 embed_model, summarizer = load_models()
 
 
-# =========================================================
 # UTILITIES
-# =========================================================
 
 def clean_text(text):
     text = re.sub(r'\b[a-d]\)\s*', '', text)
@@ -87,7 +79,7 @@ def format_output(result):
     return out
 
 
-# ================== ✅ NEW (INTENT DETECTION) ==================
+# INTENT DETECTION
 
 def detect_query_type(question):
     legal_keywords = [
@@ -105,9 +97,7 @@ def detect_query_type(question):
     return "GENERAL"
 
 
-# =========================================================
 # RAG (INDEXED DOCS)
-# =========================================================
 
 def retrieve(query, top_k=3):
     emb = embed_model.encode([query])
@@ -154,7 +144,7 @@ Risks:
     }
 
 
-# ================== ✅ NEW (GENERAL Q&A) ==================
+#GENERAL Q&A
 
 def answer_general_question(chunks, question):
     context = "\n\n".join(chunks[:3])
@@ -175,9 +165,7 @@ Question:
     return summarizer(prompt, max_new_tokens=200)[0]["generated_text"]
 
 
-# =========================================================
 # FILE EXTRACTION
-# =========================================================
 
 def extract_pdf(file):
     text = ""
@@ -197,9 +185,7 @@ def extract_excel(file):
     return df.to_string()
 
 
-# =========================================================
 # SIDEBAR (UPLOAD + CONTROLS)
-# =========================================================
 
 with st.sidebar:
     st.header("📂 Upload Document")
@@ -212,9 +198,7 @@ with st.sidebar:
         st.session_state.messages = []
 
 
-# =========================================================
 # CHAT STATE
-# =========================================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -224,9 +208,7 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 
-# =========================================================
 # CHAT INPUT (BOTTOM)
-# =========================================================
 
 query = st.chat_input("Ask a legal question...")
 
@@ -250,7 +232,7 @@ if query:
                 else:
                     chunks = retrieve(query)
 
-                # ================== ✅ ROUTING FIX ==================
+                #  ROUTING FIX 
                 query_type = detect_query_type(query)
                 st.caption(f"🧠 Detected Mode: {query_type}")
 
