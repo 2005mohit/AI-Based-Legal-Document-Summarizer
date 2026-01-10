@@ -87,6 +87,24 @@ def format_output(result):
     return out
 
 
+# ================== ✅ NEW (INTENT DETECTION) ==================
+
+def detect_query_type(question):
+    legal_keywords = [
+        "risk", "risks", "obligation", "obligations",
+        "liability", "indemn", "penalty",
+        "breach", "terminate", "termination",
+        "shall", "must"
+    ]
+
+    q = question.lower()
+    for kw in legal_keywords:
+        if kw in q:
+            return "LEGAL"
+
+    return "GENERAL"
+
+
 # =========================================================
 # RAG (INDEXED DOCS)
 # =========================================================
@@ -134,6 +152,27 @@ Risks:
         "key_risks": list(set(risks)),
         "obligations": list(set(obligations))
     }
+
+
+# ================== ✅ NEW (GENERAL Q&A) ==================
+
+def answer_general_question(chunks, question):
+    context = "\n\n".join(chunks[:3])
+
+    prompt = f"""
+You are a legal assistant.
+
+Answer the question using ONLY the information from the document.
+If the information is not present, say:
+"Not specified in the document."
+
+Document:
+{context}
+
+Question:
+{question}
+"""
+    return summarizer(prompt, max_new_tokens=200)[0]["generated_text"]
 
 
 # =========================================================
@@ -211,8 +250,15 @@ if query:
                 else:
                     chunks = retrieve(query)
 
-                result = aggregate_from_chunks(chunks)
-                answer = format_output(result)
+                # ================== ✅ ROUTING FIX ==================
+                query_type = detect_query_type(query)
+                st.caption(f"🧠 Detected Mode: {query_type}")
+
+                if query_type == "LEGAL":
+                    result = aggregate_from_chunks(chunks)
+                    answer = format_output(result)
+                else:
+                    answer = answer_general_question(chunks, query)
 
             except Exception as e:
                 answer = f"❌ Error: {e}"
