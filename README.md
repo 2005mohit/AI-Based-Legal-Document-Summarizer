@@ -1,6 +1,8 @@
 
 # AI-Based Legal Document Summarizer
 
+![Dashboard View](DashboardView1.png)
+
 ---
 
 ## Project Overview
