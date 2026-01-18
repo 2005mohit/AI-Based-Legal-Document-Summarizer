@@ -11,6 +11,8 @@ Unlike traditional machine learning projects, this system does not train models 
 
 The system is implemented as a usable service, allowing users to upload legal documents and receive meaningful summaries through an application interface.
 
+Live Demo: https://ai-based-legal-document-summarizer-bgr6nzdjn4bssm2phozddw.streamlit.app/
+
 ---
 
 ## System Workflow
