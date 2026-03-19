@@ -1,7 +1,7 @@
 # ⚖️ AI Legal Assistant
 > Pretrained Models + Embeddings + RAG (Retrieval-Augmented Generation)
 
-![Dashboard View](DashboardView.png)
+![Dashboard View](Dashboardview.png)
 
 A live AI system that automatically analyzes, summarizes, and extracts key information from legal documents. Upload any legal document (PDF/DOCX/XLSX) and ask questions in plain English.
 
