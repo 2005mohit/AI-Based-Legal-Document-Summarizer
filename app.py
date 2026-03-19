@@ -3,115 +3,87 @@ import os
 import faiss
 import pickle
 import numpy as np
-
 import pdfplumber
 import docx
 import pandas as pd
-
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from groq import Groq
 
 # STREAMLIT CONFIG
-
-st.set_page_config(
-    page_title="AI Legal Assistant",
-    layout="centered"
-)
-
-st.title(" AI Legal Assistant")
-st.caption(" Legal Document Q&A ")
+st.set_page_config(page_title="AI Legal Assistant", layout="centered")
+st.title("⚖️ AI Legal Assistant")
+st.caption("Legal Document Q&A — Summarization & Obligation Extraction")
 
 # LOAD FAISS + METADATA
-
 @st.cache_resource
 def load_faiss():
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     FAISS_PATH = os.path.join(BASE_DIR, "model", "index.faiss")
     META_PATH  = os.path.join(BASE_DIR, "model", "metadata.pkl")
-
     index = faiss.read_index(FAISS_PATH)
     with open(META_PATH, "rb") as f:
         metadata = pickle.load(f)
-
     return index, metadata
 
 index, metadata = load_faiss()
 
-# LOAD MODELS (CACHED)
-
+# LOAD EMBEDDING MODEL
 @st.cache_resource
-def load_models():
-    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-    return embed_model, tokenizer, model
+def load_embed_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-embed_model, tokenizer, model = load_models()
+embed_model = load_embed_model()
 
-# GENERATE ANSWER
+# GROQ CLIENT
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-def generate(prompt):
-    inputs = tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True)
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=120,
-        num_beams=4,
-        repetition_penalty=3.0,
-        no_repeat_ngram_size=4,
-        early_stopping=True,
-        length_penalty=1.0
+SYSTEM_PROMPT = """You are an expert AI Legal Assistant specializing in contract law, corporate agreements, and legal document analysis.
+
+Your job is to:
+- Summarize legal documents clearly and accurately
+- Extract obligations, rights, and responsibilities of each party
+- Identify key clauses: payment terms, termination, confidentiality, liability
+- Answer specific legal questions based on document content
+- Answer general legal questions from your knowledge
+
+Always be precise, structured, and avoid hallucination. If information is not in the document, say so clearly."""
+
+def ask_groq(context, question):
+    if context:
+        user_message = f"""Legal Document:
+{context}
+
+Question: {question}
+
+Provide a clear, accurate, and well-structured answer based on the document above."""
+    else:
+        user_message = f"""Question: {question}
+
+Answer this legal question accurately from your legal knowledge."""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message}
+        ],
+        temperature=0.1,
+        max_tokens=1024
     )
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return response.choices[0].message.content
 
-# GENERAL LEGAL QUESTION DETECT
-
-GENERAL_LEGAL_KEYWORDS = [
-    "what is", "define", "meaning of", "explain", "what are",
-    "difference between", "types of", "how does", "what does",
-    "contract law", "ipc", "crpc", "constitution", "fundamental rights",
-    "bail", "fir", "cognizable", "tort", "negligence", "liability",
-    "arbitration", "jurisdiction", "injunction", "affidavit", "pil",
-    "writ", "habeas corpus", "suo motu", "legal", "law", "court",
-    "judge", "advocate", "section", "act", "penalty", "offence"
-]
-
-def is_general_legal_question(query):
-    q = query.lower()
-    return any(kw in q for kw in GENERAL_LEGAL_KEYWORDS)
-
-def answer_general_legal(query):
-    prompt = f"""You are an expert legal assistant with knowledge of Indian and international law.
-Answer the following legal question clearly and accurately in 2-3 sentences.
-
-Question: {query}
-Answer:"""
-    return generate(prompt)
-
-# RAG FUNCTIONS (INDEXED DOCS)
-
-def retrieve(query, top_k=2):
+# RAG FUNCTIONS
+def retrieve(query, top_k=4):
     emb = embed_model.encode([query])
     _, ids = index.search(np.array(emb).astype("float32"), top_k)
     return [metadata[i]["text"] for i in ids[0]]
 
 def answer_from_index(query):
-    # General legal question — answer from model knowledge
-    if is_general_legal_question(query):
-        return answer_general_legal(query)
-
-    # Document specific question — answer from FAISS index
     chunks = retrieve(query)
-    best_chunk = chunks[0] if chunks else ""
-    prompt = f"""You are a legal assistant. Read the legal document excerpt below and answer the question accurately.
-
-Legal text: {best_chunk[:600]}
-
-Question: {query}
-Answer in one clear sentence:"""
-    return generate(prompt)
+    context = "\n\n".join(chunks)
+    return ask_groq(context, query)
 
 # FILE EXTRACTION
-
 def extract_pdf(file):
     text = ""
     with pdfplumber.open(file) as pdf:
@@ -128,39 +100,44 @@ def extract_excel(file):
     return df.to_string()
 
 def answer_from_uploaded_doc(text, question):
+    # Chunk the document
     chunks = [text[i:i+500] for i in range(0, len(text), 500)]
 
+    # Find most relevant chunks via FAISS
     embeddings = embed_model.encode(chunks)
     temp_index = faiss.IndexFlatL2(embeddings.shape[1])
     temp_index.add(np.array(embeddings).astype("float32"))
 
     q_emb = embed_model.encode([question])
-    _, ids = temp_index.search(np.array(q_emb).astype("float32"), 2)
+    _, ids = temp_index.search(np.array(q_emb).astype("float32"), 4)
 
-    best_chunk = chunks[ids[0][0]]
-    prompt = f"""You are a legal assistant. Read the legal document excerpt below and answer the question accurately.
+    # Use top 4 relevant chunks as context
+    context = "\n\n".join([chunks[i] for i in ids[0]])
+    return ask_groq(context, question)
 
-Legal text: {best_chunk}
-
-Question: {question}
-Answer in one clear sentence:"""
-    return generate(prompt)
-
-
-# SIDEBAR (UPLOAD)
-
+# SIDEBAR
 with st.sidebar:
-    st.header(" Upload Document (Optional)")
-    uploaded_file = st.file_uploader(
-        "PDF / DOCX / XLSX",
-        type=["pdf", "docx", "xlsx"]
-    )
+    st.header("📄 Upload Document (Optional)")
+    st.caption("Upload to ask questions about a specific document")
+    uploaded_file = st.file_uploader("PDF / DOCX / XLSX", type=["pdf", "docx", "xlsx"])
 
-    if st.button(" Clear Chat"):
+    if uploaded_file:
+        st.success(f"✅ {uploaded_file.name} uploaded")
+
+    st.divider()
+    if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
+        st.rerun()
+
+    st.divider()
+    st.caption("💡 Try asking:")
+    st.caption("• Summarize this agreement")
+    st.caption("• What are the obligations of each party?")
+    st.caption("• What are the termination clauses?")
+    st.caption("• What is the payment terms?")
+    st.caption("• What is bail in Indian law?")
 
 # CHAT STATE
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -169,17 +146,15 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # CHAT INPUT
-
 prompt = st.chat_input("Ask a legal question...")
 
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
-
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        with st.spinner("Analyzing..."):
             try:
                 if uploaded_file:
                     if uploaded_file.name.endswith(".pdf"):
@@ -188,13 +163,11 @@ if prompt:
                         text = extract_docx(uploaded_file)
                     else:
                         text = extract_excel(uploaded_file)
-
                     answer = answer_from_uploaded_doc(text, prompt)
                 else:
                     answer = answer_from_index(prompt)
-
             except Exception as e:
-                answer = f" Error: {e}"
+                answer = f"❌ Error: {e}"
 
         st.markdown(answer)
 
