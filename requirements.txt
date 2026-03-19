@@ -1,6 +1,4 @@
-fastapi
-uvicorn
-pydantic
+streamlit
 faiss-cpu
 sentence-transformers
 transformers
@@ -9,4 +7,4 @@ numpy
 pdfplumber
 python-docx
 pandas
-python-multipart
+openpyxl
