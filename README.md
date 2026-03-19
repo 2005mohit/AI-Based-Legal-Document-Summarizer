@@ -1,4 +1,4 @@
-# ⚖️ AI-Based Legal Document Summarizer
+# ⚖️ AI Legal Assistant
 > Pretrained Models + Embeddings + RAG (Retrieval-Augmented Generation)
 
 ![Dashboard View](DashboardView.png)
