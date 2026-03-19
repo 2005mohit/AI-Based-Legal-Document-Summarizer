@@ -9,7 +9,7 @@ import docx
 import pandas as pd
 
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 
 # STREAMLIT CONFIG
 
@@ -42,9 +42,12 @@ index, metadata = load_faiss()
 @st.cache_resource
 def load_models():
     embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-small")
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
     summarizer = pipeline(
         "text2text-generation",
-        model="google/flan-t5-small",
+        model=model,
+        tokenizer=tokenizer,
         device=-1
     )
     return embed_model, summarizer
