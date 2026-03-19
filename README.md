@@ -1,6 +1,8 @@
 # ⚖️ AI-Based Legal Document Summarizer
 > Pretrained Models + Embeddings + RAG (Retrieval-Augmented Generation)
 
+![Dashboard View](DashboardView.png)
+
 A live AI system that automatically analyzes, summarizes, and extracts key information from legal documents. Upload any legal document (PDF/DOCX/XLSX) and ask questions in plain English.
 
 🔗 **Live Demo:** https://ai-based-legal-document-summarizer-wibtkmprcyj8uhhh4bvrgu.streamlit.app/
